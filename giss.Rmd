@@ -1,0 +1,425 @@
+---
+title: "Time Series Decomposition Test"
+output:
+  html_document: default
+  pdf_document: default
+date: '2022-02-19'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tsibble)
+library(fable)
+library(feasts)
+library(readr)
+library(lubridate)
+```
+
+## Data processing and cleanup
+
+```{r importdata}
+global_temp = read_csv("GLB.Ts+dSST.csv", 
+                        comment = "#", na = "***")
+
+global_temp = select(global_temp, c(1:13))
+global_temp = global_temp %>%
+  pivot_longer(!Year, names_to = "months", values_to = "temp")
+
+global_temp_testfit = filter(global_temp, Year > 1970 & Year < 2010)
+global_temp = filter(global_temp, Year > 1970)
+
+
+global_temp = global_temp %>%
+  mutate(
+    date = str_c(global_temp$Year, " ", global_temp$months),
+    date = yearmonth(date)
+    )
+global_temp = select(global_temp, c(4, 3))
+
+global_temp_tsbl = as_tsibble(global_temp, index = date)
+global_temp_tsbl = na.omit(global_temp_tsbl) 
+
+
+```
+
+## Basic plot
+
+```{r plot1, echo=FALSE}
+autoplot(global_temp_tsbl, temp) +
+  labs(y = "Temperature Anomaly in Degs C",
+       title = "Global Monthly Temperature Anomaly")
+```
+
+## Plot with trend line
+
+```{r, echo=FALSE}
+dcmp = global_temp_tsbl %>%
+  model(stl = STL(temp))
+
+components(dcmp) %>%
+  as_tsibble() %>%
+  autoplot(temp, colour="gray") +
+  geom_line(aes(y=trend), colour = "#D55E00") +
+  labs(
+    y = "Temperature Anomaly in Degs C",
+    title = "Global Monthly Temperature Anomaly"
+  )
+```
+
+## STL decomposition plot
+
+```{r, echo=FALSE}
+components(dcmp) %>% autoplot() 
+```
+
+## ACF plot of original data
+
+```{r, echo=FALSE}
+components(dcmp) %>%
+  ACF(temp) %>%
+  autoplot() +
+  labs(
+    y = "ACF",
+    title = "Temperature Anomaly ACF"
+  )
+```
+
+## ACF plot of detrended data
+
+```{r, echo=FALSE}
+components(dcmp) %>%
+  ACF(season_year+remainder) %>%
+  autoplot() +
+  labs(
+    y = "ACF",
+    title = "Detrended Temperature Anomaly ACF"
+  )
+```
+
+## ACF plot of remainder data
+
+```{r, echo=FALSE}
+components(dcmp) %>%
+  ACF(remainder) %>%
+  autoplot() +
+  labs(
+    y = "ACF",
+    title = "Remainder Temperature Anomaly ACF"
+  )
+```
+
+
+```{r, echo=FALSE}
+global_temp_tsbl %>%
+  mutate(diff_close = difference(temp)) %>%
+  features(diff_close, ljung_box, lag = 10)
+```
+
+
+
+```{r, echo=FALSE}
+global_temp_tsbl %>%
+  features(temp, unitroot_kpss)
+```
+
+```{r, echo=FALSE}
+global_temp_tsbl %>%
+  mutate(diff_close = difference(temp)) %>%
+  features(diff_close, unitroot_kpss)
+
+global_temp_tsbl %>%
+  features(temp, unitroot_ndiffs)
+```
+
+```{r, echo=FALSE}
+fit = global_temp_tsbl %>%
+  model(ARIMA(temp))
+report(fit)
+
+```
+
+```{r, echo=FALSE}
+fit %>% forecast(h=10) %>%
+  autoplot(global_temp_tsbl) +
+  labs(y = "temp anomaly", title = "giss temp")
+
+fit %>%
+  gg_tsresiduals()
+```
+```{r, echo=FALSE}
+
+global_temp_tsbl %>%
+  gg_tsdisplay(difference(temp, 12) %>% difference(),
+               plot_type='partial', lag=36) +
+  labs(title = "Double differenced", y="")
+
+```
+
+
+```{r, echo=FALSE}
+global_temp_tsbl %>%
+  PACF(temp) %>%
+  autoplot() +
+  labs(y = "pacf", title = "giss temp PACF")
+
+
+```
+
+
+
+```{r, echo=FALSE}
+global_temp_tsbl %>%
+  model(ETS(temp)) %>%
+  forecast(h = "5 years") %>%
+  autoplot(global_temp_tsbl) +
+  labs(title = "giss temp anomaly ets forecast",
+       y = "temp anomaly")
+```
+
+```{r, echo=FALSE}
+global_temp_tsbl %>%
+  model(ARIMA(temp)) %>%
+  forecast(h = "5 years") %>%
+  autoplot(global_temp_tsbl) +
+  labs(title = "giss temp anomaly arima forecast",
+       y = "temp anomaly")
+```
+
+
+3/17
+
+
+```{r, echo=FALSE}
+
+decomp = components(dcmp)
+
+decomp_tsbl = as_tsibble(decomp, index = date)
+decomp_tsbl = select(decomp_tsbl, 2:6)
+
+
+
+```
+
+
+
+
+```{r, echo=FALSE}
+
+temp_fit = global_temp_tsbl %>%
+  model(stepwise = ARIMA(temp),
+        search = ARIMA(temp, stepwise=FALSE))
+
+glance(temp_fit) %>% arrange(AICc) %>% select(.model:BIC)
+
+temp_fit %>%
+  forecast(h="5 years") %>%
+  filter(.model=='search') %>%
+  autoplot(global_temp_tsbl)
+
+```
+
+
+
+```{r, echo=FALSE}
+
+decomp_tsbl %>% model(ARIMA(remainder, stepwise=FALSE)) %>% forecast(h="5 years") %>%
+  autoplot(decomp_tsbl) +
+  labs(y = "temp anomaly", title = "giss temp")
+
+decomp_tsbl %>% model(ARIMA(trend, stepwise=FALSE)) %>% forecast(h="5 years") %>%
+  autoplot(decomp_tsbl) +
+  labs(y = "temp anomaly", title = "giss temp")
+
+decomp_tsbl %>% model(ARIMA(season_year, stepwise=FALSE)) %>% forecast(h="5 years") %>%
+  autoplot(decomp_tsbl) +
+  labs(y = "temp anomaly", title = "giss temp")
+```
+
+
+```{r, echo=FALSE}
+
+
+remainder_generate = decomp_tsbl %>% model(ARIMA(remainder, stepwise=FALSE)) %>% generate(h="5 years")
+trend_generate = decomp_tsbl %>% model(ARIMA(trend, stepwise=FALSE)) %>% generate(h="5 years")
+season_generate = decomp_tsbl %>% model(ARIMA(season_year, stepwise=FALSE)) %>% generate(h="5 years")
+
+generate_5year = remainder_generate %>% left_join(trend_generate, by = "date") %>% 
+  left_join(season_generate, by = "date") %>% mutate(temp = .sim.x + .sim.y + .sim) %>%
+  select(c(date, temp))
+
+ggplot() +
+  geom_line(data = global_temp_tsbl, aes(x = date, y = temp)) +
+  geom_line(data = generate_5year, aes(x = date, y = temp), color="orange")
+
+
+```
+
+
+
+```{r, echo=FALSE}
+
+remainder_forecast = decomp_tsbl %>% model(ARIMA(remainder, stepwise=FALSE)) %>% forecast(h="5 years")
+trend_forecast = decomp_tsbl %>% model(ARIMA(trend, stepwise=FALSE)) %>% forecast(h="5 years")
+season_forecast = decomp_tsbl %>% model(ARIMA(season_year, stepwise=FALSE)) %>% forecast(h="5 years")
+
+forecast_5year = remainder_forecast %>% left_join(trend_forecast, by = "date") %>% 
+  left_join(season_forecast, by = "date") %>% mutate(temp = .mean.x + .mean.y + .mean) 
+
+forecast_5year = forecast_5year[c(2, 11)] 
+
+ggplot() +
+  geom_line(data = global_temp_tsbl, aes(x = date, y = temp)) +
+  geom_line(data = forecast_5year, aes(x = date, y = temp), color="blue", alpha = 0.5) +
+  geom_line(data = generate_5year, aes(x = date, y = temp), color="orange", alpha = 0.5)
+
+
+```
+
+
+```{r, echo=FALSE}
+
+library(fable.prophet)
+
+prophet_fit = global_temp_tsbl %>%
+  model(arima = ARIMA(temp),
+        ets = ETS(temp),
+        prophet = prophet(temp))
+
+prophet_fit %>% forecast(h = "5 years") %>% autoplot(global_temp_tsbl)
+
+
+
+prophet_fit2 = global_temp_tsbl_testfit %>%
+  model(prophet = prophet(temp))
+
+prophet_fit2 %>% forecast(h = "12 years") %>% autoplot(global_temp_tsbl_long)
+
+
+```
+
+
+```{r, echo=FALSE}
+
+remainder_forecast_arima = decomp_tsbl %>% model(ARIMA(remainder, stepwise=FALSE)) %>% forecast(h="5 years")
+trend_forecast_arima = decomp_tsbl %>% model(ARIMA(trend, stepwise=FALSE)) %>% forecast(h="5 years")
+season_forecast_arima = decomp_tsbl %>% model(ARIMA(season_year, stepwise=FALSE)) %>% forecast(h="5 years")
+
+remainder_forecast_ets = decomp_tsbl %>% model(ETS(remainder)) %>% forecast(h="5 years")
+trend_forecast_ets = decomp_tsbl %>% model(ETS(trend)) %>% forecast(h="5 years")
+season_forecast_ets = decomp_tsbl %>% model(ETS(season_year)) %>% forecast(h="5 years")
+
+remainder_forecast_prophet = decomp_tsbl %>% model(prophet(remainder)) %>% forecast(h="5 years")
+trend_forecast_prophet = decomp_tsbl %>% model(prophet(trend)) %>% forecast(h="5 years")
+season_forecast_prophet = decomp_tsbl %>% model(prophet(season_year)) %>% forecast(h="5 years")
+
+
+forecast_5year_arima = remainder_forecast_arima %>% left_join(trend_forecast_arima, by = "date") %>% 
+  left_join(season_forecast_arima, by = "date") %>% mutate(temp = .mean.x + .mean.y + .mean) 
+
+forecast_5year_ets = remainder_forecast_ets %>% left_join(trend_forecast_ets, by = "date") %>% 
+  left_join(season_forecast_ets, by = "date") %>% mutate(temp = .mean.x + .mean.y + .mean) 
+
+forecast_5year_prophet = remainder_forecast_prophet %>% left_join(trend_forecast_prophet, by = "date") %>% 
+  left_join(season_forecast_prophet, by = "date") %>% mutate(temp = .mean.x + .mean.y + .mean) 
+
+
+forecast_5year_arima = forecast_5year_arima[c(2, 11)] 
+forecast_5year_ets = forecast_5year_ets[c(2, 11)] 
+forecast_5year_prophet = forecast_5year_prophet[c(2, 11)] 
+
+ggplot() +
+  geom_line(data = global_temp_tsbl, aes(x = date, y = temp)) +
+  geom_line(data = forecast_5year_arima, aes(x = date, y = temp), color="blue", alpha = 0.5) +
+  geom_line(data = forecast_5year_ets, aes(x = date, y = temp), color="orange", alpha = 0.5) +
+  geom_line(data = forecast_5year_prophet, aes(x = date, y = temp), color="green", alpha = 0.5)
+
+
+```
+
+
+```{r importdata}
+global_temp_long = read_csv("GLB.Ts+dSST.csv", 
+                        comment = "#", na = "***")
+
+global_temp_long = select(global_temp_long, c(1:13))
+global_temp_long = global_temp_long %>%
+  pivot_longer(!Year, names_to = "months", values_to = "temp")
+
+global_temp_long = global_temp_long %>%
+  mutate(
+    date = str_c(global_temp_long$Year, " ", global_temp_long$months),
+    date = yearmonth(date)
+    )
+global_temp_long = select(global_temp_long, c(4, 3))
+
+global_temp_tsbl_long = as_tsibble(global_temp_long, index = date)
+global_temp_tsbl_long = na.omit(global_temp_tsbl_long) 
+
+
+
+global_temp_testfit = global_temp_testfit %>%
+  mutate(
+    date = str_c(global_temp_testfit$Year, " ", global_temp_testfit$months),
+    date = yearmonth(date)
+    )
+global_temp_testfit = select(global_temp_testfit, c(4, 3))
+
+global_temp_tsbl_testfit = as_tsibble(global_temp_testfit, index = date)
+global_temp_tsbl_testfit = na.omit(global_temp_tsbl_testfit) 
+
+
+
+
+decomp_testfit = components(global_temp_tsbl_testfit %>% model(stl = STL(temp)))
+decomp_testfit_tsbl = as_tsibble(decomp_testfit, index = date)
+decomp_testfit_tsbl = select(decomp_testfit_tsbl, 2:6)
+
+
+```
+
+
+
+
+
+
+
+```{r, echo=FALSE}
+
+remainder_forecast_arima_testfit = decomp_testfit_tsbl %>% model(ARIMA(remainder, stepwise=FALSE)) %>% forecast(h="12 years")
+trend_forecast_arima_testfit = decomp_testfit_tsbl %>% model(ARIMA(trend, stepwise=FALSE)) %>% forecast(h="12 years")
+season_forecast_arima_testfit = decomp_testfit_tsbl %>% model(ARIMA(season_year, stepwise=FALSE)) %>% forecast(h="12 years")
+
+remainder_forecast_ets_testfit = decomp_testfit_tsbl %>% model(ETS(remainder)) %>% forecast(h="12 years")
+trend_forecast_ets_testfit = decomp_testfit_tsbl %>% model(ETS(trend)) %>% forecast(h="12 years")
+season_forecast_ets_testfit = decomp_testfit_tsbl %>% model(ETS(season_year)) %>% forecast(h="12 years")
+
+remainder_forecast_prophet_testfit = decomp_testfit_tsbl %>% model(prophet(remainder)) %>% forecast(h="12 years")
+trend_forecast_prophet_testfit = decomp_testfit_tsbl %>% model(prophet(trend)) %>% forecast(h="12 years")
+season_forecast_prophet_testfit = decomp_testfit_tsbl %>% model(prophet(season_year)) %>% forecast(h="12 years")
+
+
+forecast_5year_arima_testfit = remainder_forecast_arima_testfit %>% left_join(trend_forecast_arima_testfit, by = "date") %>% 
+  left_join(season_forecast_arima_testfit, by = "date") %>% mutate(temp = .mean.x + .mean.y + .mean) 
+
+forecast_5year_ets_testfit = remainder_forecast_ets_testfit %>% left_join(trend_forecast_ets_testfit, by = "date") %>% 
+  left_join(season_forecast_ets_testfit, by = "date") %>% mutate(temp = .mean.x + .mean.y + .mean) 
+
+forecast_5year_prophet_testfit = remainder_forecast_prophet_testfit %>% left_join(trend_forecast_prophet_testfit, by = "date") %>% 
+  left_join(season_forecast_prophet_testfit, by = "date") %>% mutate(temp = .mean.x + .mean.y + .mean) 
+
+
+forecast_5year_arima_testfit = forecast_5year_arima_testfit[c(2, 11)] 
+forecast_5year_ets_testfit = forecast_5year_ets_testfit[c(2, 11)] 
+forecast_5year_prophet_testfit = forecast_5year_prophet_testfit[c(2, 11)] 
+
+ggplot() +
+  geom_line(data = global_temp_tsbl_long, aes(x = date, y = temp), alpha = 0.25) +
+  geom_line(data = forecast_5year_arima_testfit, aes(x = date, y = temp), color="blue") +
+  geom_line(data = forecast_5year_ets_testfit, aes(x = date, y = temp), color="orange") +
+  geom_line(data = forecast_5year_prophet_testfit, aes(x = date, y = temp), color="green")
+
+
+
+```
+
